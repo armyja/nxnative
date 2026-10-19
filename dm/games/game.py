@@ -114,6 +114,7 @@ def header(g):
     if gts not in ('submission', 'segment'): sys.exit(f'{g.id}: gpu_timestamps must be submission or segment: {gts}')
     om = g.get('op_mode', 'console')   # the operation mode reported at start (hle_oe.c dm_opmode; DM_OPMODE overrides): console = docked, handheld = touch screen in use (Super Mario Galaxy's pointer)
     if om not in ('console', 'handheld'): sys.exit(f'{g.id}: op_mode must be console or handheld: {om}')
+    hd = g.get('heap_default', '0')   # bytes of the process heap the host hands out before the title calls SetHeapSize (0 = none): the real loader sizes the heap, and titles that never call SetHeapSize (Unity's .NET/font engine, which uses nn::os::AllocateMemoryBlock) fail without it
     api = g.get('device_api', '55.15')   # the NVN API major.minor version nvnDeviceGetInteger reports (hle_nvn.c)
     if not re.fullmatch(r'\d+\.\d+', api): sys.exit(f'{g.id}: device_api must be major.minor: {api}')
     src = f'dm/games/{g.id}' if g.dir.parent == HERE else str(g.dir)
@@ -129,6 +130,7 @@ def header(g):
          f'#define DM_GAME_MEM_ALIAS {g.int("mem_alias"):#x}ull',
          f'#define DM_GAME_MEM_STACK {g.int("mem_stack"):#x}ull',
          f'#define DM_GAME_APP_POOL {g.int("app_pool"):#x}ull',
+         f'#define DM_GAME_HEAP_DEFAULT {int(hd, 0):#x}ull',
          f'#define DM_GAME_MEM_USED {int(g.get("mem_used", "0x4000000"), 0):#x}ull',   # used memory reported beside the heap (hle_svc.c GetInfo UsedMemorySize)
          f'#define DM_GAME_NVN_SSBO_BASE(stage) ({sb})',
          f'#define DM_GAME_NVN_TEX_BASE {g.int("nvn_tex_base"):#x}',
