@@ -49,6 +49,17 @@ HLE_FORCE("_ZN2nn4time19StandardSteadyClock19GetCurrentTimePointEPNS0_20SteadyCl
 HLE_FORCE("_ZN2nn4time23StandardUserSystemClock14GetCurrentTimeEPNS0_9PosixTimeE", "user clock → host time()", Result, h_time_GetCurrentTime, int64_t *out) {
     int64_t ft = fixed_time(); *out = ft >= 0 ? ft : time(NULL); return RES_OK;
 }
+// The clock context (UTC offset + steady time point). Titles that show a save timestamp read it here: without the hook the
+// SDK asks the time service over IPC, fails, and hands back an all-zero context, so the save list says 0001-01-01 00:00
+// (Ace Attorney Investigations 1&2 stores the slot time this way). Answer with the host's local zone, the same convention
+// as ToCalendarTime below.
+typedef struct { int64_t offset; int64_t time_point; uint8_t source_id[16]; } SystemClockContextHost;
+HLE_FORCE("_ZN2nn4time23StandardUserSystemClock21GetSystemClockContextEPNS0_18SystemClockContextE", "user clock context → host local zone", Result, h_time_GetContext, void *out) {
+    time_t t = time(NULL); struct tm tm; localtime_r(&t, &tm);
+    SystemClockContextHost c = { .offset = (int64_t)tm.tm_gmtoff, .time_point = (int64_t)t, .source_id = {0} };
+    if (out) memcpy(out, &c, sizeof c);
+    return RES_OK;
+}
 // Forced Terror Zone for stages 6–10 of the boss rush (set by dm_bossrush.c): when g_dm_tz_time is non-zero and not expired, only the clock reads at the "Terror Zone" sites get it; save timestamps and all other calls are unchanged.
 // Which sites: the return point falls in the cluster starting at the zone function 0x58f1e0 (0x58f1e0–0x591440), or the zone schedule 0x58f310 is called within 8 instructions after the return (server side 0x636b38 applying the zone, 0x694b48 and so on, 9 sites).
 // Expiry: dm_bossrush renews it by 1 second every tick; once this run stops ticking (exit / crash) it no longer applies, and the next run gets the real clock when the game is created.
