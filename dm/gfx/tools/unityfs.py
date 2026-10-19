@@ -56,16 +56,32 @@ def bundle_files(d):
     return [(name, bytes(out[off:off + sz])) for off, sz, name in nodes]
 
 def common_strings(image):
-    """Unity's common string table in the game's main → {offset: string}"""
+    """Unity's common string table in the game's main → {offset: string}
+
+    Newer players (Unity 2022, e.g. Ace Attorney Investigations 1&2) keep the table in place but patch single entries
+    over, so the exact 'AABB\\0AnimationClip\\0AnimationCurve\\0' prefix no longer matches and the walk stops at the
+    first byte that is not printable. Accept the shorter prefix and skip damaged runs: the table is a byte buffer
+    addressed by offset, so an entry whose text is damaged only loses its name. Bounded to 256 KB / 8192 entries, and
+    every branch advances (a damaged run used to leave p where it was)."""
+    LIMIT = 1 << 18
     a = image.find(b'AABB\0AnimationClip\0AnimationCurve\0')
+    strict = a >= 0
+    if a < 0: a = image.find(b'AABB\0AnimationClip')
     if a < 0: raise ValueError('no Unity common string table in main (AABB\\0AnimationClip...)')
-    tab, p = {}, a
-    while True:
-        e = image.index(b'\0', p)
-        if e == p: break
-        s = image[p:e]
-        if not all(0x20 <= ch < 0x7f for ch in s): break
-        tab[p - a] = s.decode(); p = e + 1
+    end = min(len(image), a + LIMIT)
+    tab, p, damaged = {}, a, 0
+    while p < end - 4 and len(tab) < 8192:
+        if image[p] == 0: p += 1; continue                       # padding between entries
+        e = image.find(b'\0', p, end)
+        if e < 0: break
+        run = image[p:e]
+        if all(0x20 <= ch < 0x7f for ch in run):
+            tab[p - a] = run.decode(); p = e + 1
+        elif strict:
+            break
+        else:                                                    # damaged entry: skip the whole run
+            p = e + 1; damaged += 1
+    if damaged: print(f'[unityfs] common string table: {len(tab)} entries, {damaged} damaged runs skipped', flush=True)
     return tab
 
 class Node:
