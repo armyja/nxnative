@@ -679,11 +679,31 @@ static id<MTL4ComputeCommandEncoder> blit(void) {
     return e;
 }
 
+// The GPU reads a buffer copy's source when the copy executes. The guest may reuse that source (command or
+// staging memory) for the next batch before then, so the copy would read the later bytes instead of the ones as
+// of this position in the command stream - the same failure the inline uniform update avoids by copying into the
+// host's ring at encode time. Snapshot small copy sources the same way; DM_NVN_COPY_SNAP=0 restores the old path.
+static id<MTLBuffer> g_cps_buf; static size_t g_cps_off, g_cps_size;
+static int cps_on(void) { static int v = -1; if (v < 0) { const char *e = getenv("DM_NVN_COPY_SNAP"); v = !(e && !strcmp(e, "0")); if (!v) MLOG("DM_NVN_COPY_SNAP=0: copy sources are read from guest memory when the copy executes"); } return v; }
 void mtl_sub_copy(uint64_t src, uint64_t dst, uint64_t n) {
     if (g_npend < PEND_MAX) { g_pend_lo[g_npend] = dst; g_pend_hi[g_npend++] = dst + n; } else g_pend_over = 1;
     void *sb, *db; uint64_t so, dof;
     if (!mtl_addr(src, n, &sb, &so) || !mtl_addr(dst, n, &db, &dof))
         MDIE("buffer copy address is in no memory pool src=%#llx dst=%#llx n=%#llx", (unsigned long long)src, (unsigned long long)dst, (unsigned long long)n);
+    if (cps_on() && n <= (8u << 20)) {
+        size_t need = (size_t)((n + 255ull) & ~255ull);
+        if (!g_cps_buf || g_cps_off + need > g_cps_size) {
+            if (g_cps_buf) defer_obj_release(g_cps_buf);   // copies already encoded still read the old block: release when this submission completes
+            g_cps_size = MAX((size_t)1 << 20, need);
+            g_cps_buf = [g_dev newBufferWithLength:g_cps_size options:MTLResourceStorageModeShared];
+            if (!g_cps_buf) MDIE("copy snapshot ring allocation failed %#zx", need);
+            res_add(g_cps_buf); g_cps_off = 0;
+        }
+        memcpy((uint8_t *)g_cps_buf.contents + g_cps_off, (const uint8_t *)[(__bridge id<MTLBuffer>)sb contents] + so, (size_t)n);
+        enc_b_copy_buffer(blit_buf(0, 0, dst, dst + n), g_cps_buf, g_cps_off, (__bridge id<MTLBuffer>)db, dof, n);
+        g_cps_off += need;
+        return;
+    }
     enc_b_copy_buffer(blit_buf(src, src + n, dst, dst + n), (__bridge id<MTLBuffer>)sb, so, (__bridge id<MTLBuffer>)db, dof, n);
 }
 
